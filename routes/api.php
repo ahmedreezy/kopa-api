@@ -30,7 +30,12 @@ Route::middleware('tenant')->group(function () {
     Route::post('/repayments/{repayment}/reverse', [RepaymentController::class, 'reverse']);
     Route::get('/receipts/{receipt}', [RepaymentController::class, 'receipt']);
     Route::get('/collections', [OperationsController::class, 'collections']);
+    Route::get('/reports/summary', [OperationsController::class, 'reportSummary']);
+    Route::get('/company', [OperationsController::class, 'company']);
+    Route::put('/company', [OperationsController::class, 'updateCompany']);
     Route::get('/branches', [OperationsController::class, 'branches']);
+    Route::post('/branches', [OperationsController::class, 'storeBranch']);
     Route::get('/staff', [OperationsController::class, 'staff']);
+    Route::post('/staff', [OperationsController::class, 'storeStaff']);
     Route::get('/audit-activity', [OperationsController::class, 'audit']);
 });
