@@ -4,14 +4,22 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, HasUuids, Notifiable;
+
+    protected $connection = 'tenant';
+
+    public $incrementing = false;
+
+    protected $keyType = 'string';
 
     /**
      * The attributes that are mass assignable.
@@ -21,7 +29,11 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'phone',
         'password',
+        'role',
+        'branch_id',
+        'is_active',
     ];
 
     /**
@@ -44,6 +56,22 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
+    }
+
+    public function canPerform(string $permission): bool
+    {
+        $permissions = [
+            'owner' => ['*'],
+            'manager' => ['borrowers.manage', 'loans.manage', 'repayments.create', 'repayments.reverse', 'reports.view', 'staff.view'],
+            'loan_officer' => ['borrowers.manage', 'loans.manage', 'reports.own'],
+            'collector' => ['collections.view', 'repayments.create', 'borrowers.view'],
+            'accountant' => ['reports.view', 'borrowers.view', 'loans.view'],
+        ];
+
+        $granted = $permissions[$this->role] ?? [];
+
+        return in_array('*', $granted, true) || in_array($permission, $granted, true);
     }
 }

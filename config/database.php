@@ -17,7 +17,7 @@ return [
     |
     */
 
-    'default' => env('DB_CONNECTION', 'sqlite'),
+    'default' => env('DB_CONNECTION', 'platform'),
 
     /*
     |--------------------------------------------------------------------------
@@ -31,6 +31,40 @@ return [
     */
 
     'connections' => [
+
+        'platform' => [
+            'driver' => env('DB_PLATFORM_DRIVER', 'pgsql'),
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '5432'),
+            'database' => env('DB_PLATFORM_DRIVER', 'pgsql') === 'sqlite'
+                ? (env('DB_DATABASE') === ':memory:' ? ':memory:' : database_path('database.sqlite'))
+                : env('DB_DATABASE', 'platform_db'),
+            'username' => env('DB_USERNAME', 'postgres'),
+            'password' => env('DB_PASSWORD', ''),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => env('DB_SSLMODE', 'prefer'),
+        ],
+
+        'tenant' => [
+            'driver' => env('TENANT_DB_DRIVER', 'pgsql'),
+            'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('TENANT_DB_PORT', env('DB_PORT', '5432')),
+            'database' => null,
+            'username' => env('TENANT_DB_USERNAME', env('DB_USERNAME', 'postgres')),
+            'password' => env('TENANT_DB_PASSWORD', env('DB_PASSWORD', '')),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => env('TENANT_DB_SSLMODE', env('DB_SSLMODE', 'prefer')),
+            'foreign_key_constraints' => true,
+            'database_directory' => env('APP_ENV') === 'testing'
+                ? database_path('tenants/testing')
+                : database_path('tenants'),
+        ],
 
         'sqlite' => [
             'driver' => 'sqlite',
