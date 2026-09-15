@@ -105,6 +105,10 @@ class OperationsController extends Controller
             'name' => $tenant->name,
             'slug' => $tenant->slug,
             'plan' => $tenant->plan,
+            'regulatory_class' => $tenant->regulatory_class,
+            'umra_license_number' => $tenant->umra_license_number,
+            'umra_license_expires_on' => $tenant->umra_license_expires_on?->toDateString(),
+            'pdpo_registration_number' => $tenant->pdpo_registration_number,
             'settings' => $tenant->settings ?? [],
         ]);
     }
@@ -118,11 +122,19 @@ class OperationsController extends Controller
             'email' => ['nullable', 'email', 'max:150'],
             'address' => ['nullable', 'string', 'max:255'],
             'currency' => ['required', 'in:UGX'],
+            'regulatory_class' => ['sometimes', 'in:money_lender,non_deposit_mfi,sacco,other'],
+            'umra_license_number' => ['nullable', 'string', 'max:100'],
+            'umra_license_expires_on' => ['nullable', 'date'],
+            'pdpo_registration_number' => ['nullable', 'string', 'max:100'],
         ]);
         $tenant = $context->tenant();
         $tenant->forceFill([
             'name' => $data['name'],
-            'settings' => collect($tenant->settings ?? [])->merge(collect($data)->except('name'))->all(),
+            'regulatory_class' => $data['regulatory_class'] ?? $tenant->regulatory_class,
+            'umra_license_number' => array_key_exists('umra_license_number', $data) ? $data['umra_license_number'] : $tenant->umra_license_number,
+            'umra_license_expires_on' => array_key_exists('umra_license_expires_on', $data) ? $data['umra_license_expires_on'] : $tenant->umra_license_expires_on,
+            'pdpo_registration_number' => array_key_exists('pdpo_registration_number', $data) ? $data['pdpo_registration_number'] : $tenant->pdpo_registration_number,
+            'settings' => collect($tenant->settings ?? [])->merge(collect($data)->only(['phone', 'email', 'address', 'currency']))->all(),
         ])->save();
 
         return $this->company($context);

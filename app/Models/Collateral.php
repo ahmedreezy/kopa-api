@@ -2,19 +2,21 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 
-class Borrower extends TenantModel
+class Collateral extends TenantModel
 {
+    protected $table = 'collateral';
+
     protected function casts(): array
     {
-        return ['metadata' => 'array', 'date_of_birth' => 'date', 'consent_given_at' => 'datetime'];
+        return ['valuation_date' => 'date'];
     }
 
-    public function loans(): HasMany
+    public function loan(): BelongsTo
     {
-        return $this->hasMany(Loan::class);
+        return $this->belongsTo(Loan::class);
     }
 
     public function documents(): MorphMany

@@ -6,12 +6,16 @@ use App\Models\AuditLog;
 use App\Models\Loan;
 use App\Models\Receipt;
 use App\Models\Repayment;
+use App\Models\User;
+use App\Support\TenantContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class RepaymentService
 {
+    public function __construct(private TenantContext $context) {}
+
     public function post(Loan $loan, array $data, string $userId): Repayment
     {
         return DB::connection('tenant')->transaction(function () use ($loan, $data, $userId) {
@@ -50,10 +54,21 @@ class RepaymentService
             if ($balance === 0) {
                 $loan->update(['status' => 'completed']);
             }
+            $borrower = $loan->borrower()->first();
+            $collector = User::query()->find($userId);
+            $tenant = $this->context->tenant();
+            $issuedAt = now();
             $receipt = Receipt::query()->create([
                 'receipt_number' => 'RCPT-'.now()->format('ymd').'-'.strtoupper(Str::random(6)),
                 'repayment_id' => $repayment->id, 'loan_id' => $loan->id,
-                'amount_paid' => $amount, 'remaining_balance' => $balance, 'issued_at' => now(),
+                'amount_paid' => $amount, 'remaining_balance' => $balance, 'issued_at' => $issuedAt,
+                'snapshot' => [
+                    'company' => ['name' => $tenant->name, 'phone' => $tenant->settings['phone'] ?? null, 'email' => $tenant->settings['email'] ?? null, 'address' => $tenant->settings['address'] ?? null],
+                    'borrower' => ['id' => $borrower?->id, 'name' => $borrower?->full_name, 'phone' => $borrower?->phone_number],
+                    'loan' => ['id' => $loan->id, 'number' => $loan->loan_number],
+                    'payment' => ['method' => $repayment->payment_method, 'reference' => $repayment->transaction_reference, 'paid_at' => $repayment->paid_at],
+                    'collector' => ['id' => $collector?->id, 'name' => $collector?->name],
+                ],
             ]);
             AuditLog::query()->create([
                 'user_id' => $userId, 'action' => 'repayment.recorded', 'entity_type' => Repayment::class,
@@ -87,6 +102,7 @@ class RepaymentService
                 ]);
             }
             Loan::query()->whereKey($original->loan_id)->update(['status' => 'active']);
+            Receipt::query()->where('repayment_id', $original->id)->update(['status' => 'reversed', 'reversed_at' => now()]);
             AuditLog::query()->create([
                 'user_id' => $userId, 'action' => 'repayment.reversed', 'entity_type' => Repayment::class,
                 'entity_id' => $reversal->id, 'old_values' => ['repayment_id' => $original->id, 'amount' => $original->amount],

@@ -64,8 +64,8 @@ class User extends Authenticatable
     {
         $permissions = [
             'owner' => ['*'],
-            'manager' => ['borrowers.manage', 'loans.manage', 'repayments.create', 'repayments.reverse', 'reports.view', 'staff.view'],
-            'loan_officer' => ['borrowers.manage', 'loans.manage', 'reports.own'],
+            'manager' => ['borrowers.manage', 'borrowers.export', 'borrowers.export_bulk', 'documents.manage', 'loan_products.manage', 'loans.manage', 'repayments.create', 'repayments.reverse', 'reports.view', 'staff.view'],
+            'loan_officer' => ['borrowers.manage', 'borrowers.export', 'documents.manage', 'loans.manage', 'reports.own'],
             'collector' => ['collections.view', 'repayments.create', 'borrowers.view'],
             'accountant' => ['reports.view', 'borrowers.view', 'loans.view'],
         ];

@@ -9,6 +9,7 @@ use App\Models\Repayment;
 use App\Services\Repayments\RepaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class RepaymentController extends Controller
 {
@@ -17,7 +18,7 @@ class RepaymentController extends Controller
         abort_unless($request->user()->canPerform('repayments.create'), 403);
         $data = $request->validate([
             'amount' => ['required', 'integer', 'min:1'], 'payment_method' => ['required', 'in:cash,mtn_momo,airtel_money,bank'],
-            'transaction_reference' => ['nullable', 'string', 'max:100'], 'notes' => ['nullable', 'string', 'max:1000'],
+            'transaction_reference' => ['nullable', 'required_unless:payment_method,cash', 'string', 'max:100', Rule::unique('tenant.repayments')->where(fn ($query) => $query->where('payment_method', $request->input('payment_method'))->where('entry_type', 'payment'))], 'notes' => ['nullable', 'string', 'max:1000'],
             'paid_at' => ['nullable', 'date', 'before_or_equal:now'],
         ]);
 
@@ -36,6 +37,6 @@ class RepaymentController extends Controller
     {
         $receipt = Receipt::query()->findOrFail($receipt);
 
-        return response()->json($receipt->loadMissing([]));
+        return response()->json($receipt->loadMissing(['repayment', 'loan.borrower']));
     }
 }
