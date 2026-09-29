@@ -21,6 +21,12 @@ class OperationsController extends Controller
     {
         $view = $request->input('view', 'due_today');
         $query = RepaymentSchedule::query()->with('loan.borrower')->where('status', '!=', 'paid');
+        $query->whereNotExists(function ($earlier) {
+            $earlier->selectRaw('1')->from('repayment_schedules as earlier')
+                ->whereColumn('earlier.loan_id', 'repayment_schedules.loan_id')
+                ->where('earlier.status', '!=', 'paid')
+                ->whereColumn('earlier.installment_number', '<', 'repayment_schedules.installment_number');
+        });
         match ($view) {
             'overdue' => $query->whereDate('due_date', '<', today()),
             'upcoming' => $query->whereDate('due_date', '>', today()),
@@ -87,7 +93,7 @@ class OperationsController extends Controller
         ])->filter(fn (array $row) => $row['payments'] > 0)->values();
 
         return response()->json([
-            'money_lent' => $loans->sum('principal_amount'),
+            'money_lent' => $loans->sum('net_disbursement_amount'),
             'money_collected' => $payments->sum('amount'),
             'interest_expected' => $loans->sum('total_interest'),
             'outstanding' => $activeLoans->sum(fn (Loan $loan) => $loan->outstanding_amount),

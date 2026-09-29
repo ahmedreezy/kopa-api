@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Loan;
 use App\Models\Receipt;
 use App\Models\Repayment;
+use App\Models\RepaymentSchedule;
 use App\Services\Repayments\RepaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,6 +24,18 @@ class RepaymentController extends Controller
         ]);
 
         return response()->json($service->post(Loan::query()->findOrFail($loan), $data, $request->user()->id), 201);
+    }
+
+    public function collect(Request $request, string $schedule, RepaymentService $service): JsonResponse
+    {
+        abort_unless($request->user()->canPerform('repayments.create'), 403);
+        $schedule = RepaymentSchedule::query()->with('loan')->findOrFail($schedule);
+
+        return response()->json($service->post($schedule->loan, [
+            'schedule_id' => $schedule->id,
+            'payment_method' => 'cash',
+            'notes' => 'Scheduled installment collected',
+        ], $request->user()->id), 201);
     }
 
     public function reverse(Request $request, string $repayment, RepaymentService $service): JsonResponse

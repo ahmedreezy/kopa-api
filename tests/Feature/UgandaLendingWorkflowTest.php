@@ -32,40 +32,52 @@ class UgandaLendingWorkflowTest extends TestCase
         ])->assertCreated();
 
         $product = $this->withHeaders($headers)->postJson('/api/loan-products', [
-            'name' => 'Trader Working Capital', 'code' => 'TWC', 'is_active' => true,
-            'minimum_principal' => 100000, 'maximum_principal' => 2000000,
+            'name' => 'Trader Working Capital', 'is_active' => true,
+            'principal_amount' => 500000,
             'interest_rate' => 2.8, 'interest_period' => 'monthly', 'interest_method' => 'simple',
-            'minimum_duration' => 1, 'maximum_duration' => 6, 'duration_unit' => 'months',
-            'repayment_frequencies' => ['weekly', 'monthly'], 'fee_type' => 'fixed', 'fee_value' => 10000,
+            'duration' => 2, 'duration_unit' => 'months',
+            'repayment_frequencies' => ['weekly', 'monthly'], 'processing_fee_type' => 'percentage', 'processing_fee_value' => 2,
             'minimum_guarantors' => 0, 'collateral_required' => false, 'required_documents' => [],
         ])->assertCreated();
+        $this->assertMatchesRegularExpression('/^LP-[A-Z0-9]{6}$/', $product->json('data.code'));
 
         $terms = [
             'loan_product_id' => $product->json('data.id'), 'borrower_id' => $borrower->json('id'),
             'branch_id' => $workspace['user']->branch_id, 'principal_amount' => 500000,
             'duration' => 2, 'duration_unit' => 'months', 'repayment_frequency' => 'monthly',
-            'disbursement_date' => '2026-09-14', 'first_repayment_date' => '2026-10-14',
+            'disbursement_date' => '2026-09-14', 'first_repayment_date' => today()->toDateString(),
             'purpose' => 'Purchase shop inventory', 'source_of_repayment' => 'Retail shop proceeds',
             'declared_disposable_income' => 500000,
         ];
+        $this->withHeaders($headers)->postJson('/api/loans/calculate', array_merge($terms, ['principal_amount' => 400000]))
+            ->assertUnprocessable()->assertJsonValidationErrors('principal_amount');
+        $this->withHeaders($headers)->postJson('/api/loans/calculate', array_merge($terms, ['duration' => 3]))
+            ->assertUnprocessable()->assertJsonValidationErrors('duration');
         $quote = $this->withHeaders($headers)->postJson('/api/loans/calculate', $terms)
-            ->assertOk()->assertJsonPath('total_interest', 28000)->assertJsonPath('fees_amount', 10000);
+            ->assertOk()->assertJsonPath('total_interest', 28000)->assertJsonPath('fees_amount', 10000)
+            ->assertJsonPath('net_disbursement_amount', 490000)->assertJsonPath('total_payable', 528000);
         $loan = $this->withHeaders($headers)->postJson('/api/loans', $terms + ['terms_confirmed' => true])
-            ->assertCreated()->assertJsonPath('total_payable', $quote->json('total_payable'));
+            ->assertCreated()->assertJsonPath('total_payable', $quote->json('total_payable'))
+            ->assertJsonPath('net_disbursement_amount', 490000);
 
-        $payment = $this->withHeaders($headers)->postJson('/api/loans/'.$loan->json('id').'/repayments', [
-            'amount' => $quote->json('installment_amount'), 'payment_method' => 'mtn_momo',
-            'transaction_reference' => 'MOMO-TEST-001',
-        ])->assertCreated()->assertJsonStructure(['receipt' => ['id', 'receipt_number', 'snapshot']]);
+        $queue = $this->withHeaders($headers)->getJson('/api/collections?view=due_today')
+            ->assertOk()->assertJsonCount(1, 'data');
+        $this->withHeaders($headers)->postJson('/api/collections/'.$loan->json('schedules.1.id').'/collect')
+            ->assertUnprocessable()->assertJsonValidationErrors('schedule');
+        $payment = $this->withHeaders($headers)->postJson('/api/collections/'.$queue->json('data.0.id').'/collect')
+            ->assertCreated()->assertJsonPath('amount', $quote->json('installment_amount'))
+            ->assertJsonStructure(['receipt' => ['id', 'receipt_number', 'snapshot']]);
+        $this->withHeaders($headers)->getJson('/api/collections?view=due_today')
+            ->assertOk()->assertJsonCount(0, 'data');
 
         $this->withHeaders($headers)->getJson('/api/receipts/'.$payment->json('receipt.id'))
             ->assertOk()->assertJsonPath('snapshot.borrower.name', 'Sarah Nakato')
-            ->assertJsonPath('snapshot.payment.reference', 'MOMO-TEST-001');
+            ->assertJsonPath('snapshot.payment.method', 'cash');
         $this->withHeaders($headers)->get('/api/borrowers/'.$borrower->json('id').'/export.csv')
             ->assertOk()->assertHeader('content-type', 'text/csv; charset=UTF-8');
     }
 
-    public function test_money_lender_product_above_monthly_cap_is_rejected(): void
+    public function test_product_creation_ignores_license_rate_guidelines(): void
     {
         app(TenantProvisioningService::class)->provision(['name' => 'Cap Test Loans'], [
             'name' => 'Test Owner', 'email' => 'cap@kopa.test', 'password' => 'password',
@@ -76,12 +88,12 @@ class UgandaLendingWorkflowTest extends TestCase
         $headers = ['Authorization' => 'Bearer '.$login->json('token'), 'X-Tenant' => 'cap-test-loans'];
 
         $this->withHeaders($headers)->postJson('/api/loan-products', [
-            'name' => 'Non-compliant product', 'code' => 'BAD', 'is_active' => true,
-            'minimum_principal' => 100000, 'maximum_principal' => 500000,
+            'name' => 'Non-compliant product', 'is_active' => true,
+            'principal_amount' => 500000,
             'interest_rate' => 3, 'interest_period' => 'monthly', 'interest_method' => 'simple',
-            'minimum_duration' => 1, 'maximum_duration' => 3, 'duration_unit' => 'months',
-            'repayment_frequencies' => ['monthly'], 'fee_type' => 'fixed', 'fee_value' => 0,
+            'duration' => 3, 'duration_unit' => 'months',
+            'repayment_frequencies' => ['monthly'], 'processing_fee_type' => 'fixed', 'processing_fee_value' => null,
             'minimum_guarantors' => 0, 'collateral_required' => false, 'required_documents' => [],
-        ])->assertUnprocessable()->assertJsonValidationErrors('interest_rate');
+        ])->assertCreated();
     }
 }

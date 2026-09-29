@@ -11,9 +11,9 @@ class LoanProduct extends TenantModel
         return [
             'is_active' => 'boolean',
             'interest_rate' => 'decimal:4',
-            'fee_value' => 'decimal:2',
+            'processing_fee_value' => 'decimal:2',
             'collateral_required' => 'boolean',
-            'collateral_coverage_percent' => 'decimal:2',
+            'minimum_collateral_value_percent' => 'decimal:2',
             'repayment_frequencies' => 'array',
             'required_documents' => 'array',
         ];

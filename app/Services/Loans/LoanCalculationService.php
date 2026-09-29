@@ -22,15 +22,14 @@ class LoanCalculationService
             default => 1,
         };
         $interest = (int) round($principal * ($rate / 100) * $rateMultiplier);
-        $fees = $product->fee_type === 'percentage'
-            ? (int) round($principal * ((float) $product->fee_value / 100))
-            : (int) round((float) $product->fee_value);
+        $fees = $this->processingFee($product, $principal);
 
-        return $this->schedule($principal, $interest, $fees, $duration, $unit, $terms['repayment_frequency'], $terms['first_repayment_date']) + [
+        return $this->schedule($principal, $interest, $duration, $unit, $terms['repayment_frequency'], $terms['first_repayment_date']) + [
             'interest_rate' => $product->interest_rate,
             'interest_period' => $product->interest_period,
             'interest_method' => 'simple',
             'fees_amount' => $fees,
+            'net_disbursement_amount' => $principal - $fees,
             'effective_monthly_rate' => round(($interest / max(1, $principal)) * 100 / max($months, 0.0001), 4),
             'effective_annual_rate' => round(($interest / max(1, $principal)) * 100 / max($years, 0.0001), 4),
         ];
@@ -47,13 +46,17 @@ class LoanCalculationService
         }
         $multiplier = ($terms['interest_period'] ?? 'loan_term') === 'monthly' ? $this->months($duration, $unit) : 1;
         $interest = (int) round($principal * ($rate / 100) * $multiplier);
+        $fees = (int) ($terms['fees_amount'] ?? 0);
 
-        return $this->schedule($principal, $interest, (int) ($terms['fees_amount'] ?? 0), $duration, $unit, $terms['repayment_frequency'], $terms['first_repayment_date']);
+        return $this->schedule($principal, $interest, $duration, $unit, $terms['repayment_frequency'], $terms['first_repayment_date']) + [
+            'fees_amount' => $fees,
+            'net_disbursement_amount' => $principal - $fees,
+        ];
     }
 
-    private function schedule(int $principal, int $interest, int $fees, int $duration, string $unit, string $frequency, string $firstDate): array
+    private function schedule(int $principal, int $interest, int $duration, string $unit, string $frequency, string $firstDate): array
     {
-        $total = $principal + $interest + $fees;
+        $total = $principal + $interest;
         $installments = $this->installmentCount($duration, $unit, $frequency);
         $baseAmount = intdiv($total, $installments);
         $remainder = $total - ($baseAmount * $installments);
@@ -75,19 +78,37 @@ class LoanCalculationService
         ];
     }
 
+    private function processingFee(LoanProduct $product, int $principal): int
+    {
+        $fee = $product->processing_fee_type === 'percentage'
+            ? (int) round($principal * ((float) $product->processing_fee_value / 100))
+            : (int) round((float) ($product->processing_fee_value ?? 0));
+
+        if ($fee < 0 || $fee >= $principal) {
+            throw new InvalidArgumentException('The processing fee must be less than the principal.');
+        }
+
+        return $fee;
+    }
+
     public function months(int $duration, string $unit): float
     {
-        return match ($unit) { 'days' => $duration / 30.4375, 'weeks' => ($duration * 7) / 30.4375, default => $duration };
+        return match ($unit) {
+            'days' => $duration / 30.4375, 'weeks' => ($duration * 7) / 30.4375, default => $duration
+        };
     }
 
     private function days(int $duration, string $unit): int
     {
-        return match ($unit) { 'days' => $duration, 'weeks' => $duration * 7, default => (int) round($duration * 365 / 12) };
+        return match ($unit) {
+            'days' => $duration, 'weeks' => $duration * 7, default => (int) round($duration * 365 / 12)
+        };
     }
 
     private function installmentCount(int $duration, string $unit, string $frequency): int
     {
         $days = $this->days($duration, $unit);
+
         return max(1, match ($frequency) {
             'daily' => (int) ceil($days), 'weekly' => (int) ceil($days / 7),
             'biweekly' => (int) ceil($days / 14), 'monthly' => (int) ceil($days / 30.4375),

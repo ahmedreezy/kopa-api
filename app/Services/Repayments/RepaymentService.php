@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\Loan;
 use App\Models\Receipt;
 use App\Models\Repayment;
+use App\Models\RepaymentSchedule;
 use App\Models\User;
 use App\Support\TenantContext;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +22,17 @@ class RepaymentService
         return DB::connection('tenant')->transaction(function () use ($loan, $data, $userId) {
             $loan = Loan::query()->lockForUpdate()->findOrFail($loan->id);
             $outstanding = $loan->outstanding_amount;
-            $amount = (int) $data['amount'];
+            $scheduledPayment = null;
+            if ($scheduleId = ($data['schedule_id'] ?? null)) {
+                $scheduledPayment = RepaymentSchedule::query()->where('loan_id', $loan->id)->lockForUpdate()->findOrFail($scheduleId);
+                throw_if($scheduledPayment->due_date->isAfter(today()), ValidationException::withMessages(['schedule' => 'This installment is not due yet.']));
+                $hasEarlierUnpaid = $loan->schedules()->whereColumn('amount_paid', '<', 'amount_due')
+                    ->where('installment_number', '<', $scheduledPayment->installment_number)->exists();
+                throw_if($hasEarlierUnpaid, ValidationException::withMessages(['schedule' => 'Collect the earlier unpaid installment first.']));
+                $amount = (int) $scheduledPayment->amount_due - (int) $scheduledPayment->amount_paid;
+            } else {
+                $amount = (int) $data['amount'];
+            }
             throw_if($loan->status !== 'active', ValidationException::withMessages(['loan' => 'This loan is not active.']));
             throw_if($amount <= 0 || $amount > $outstanding, ValidationException::withMessages(['amount' => 'Payment must not exceed the outstanding balance.']));
 

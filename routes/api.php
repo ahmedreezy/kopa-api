@@ -40,6 +40,7 @@ Route::middleware('tenant')->group(function () {
     Route::post('/loans/calculate', [LoanController::class, 'calculate']);
     Route::apiResource('loans', LoanController::class)->only(['index', 'store', 'show']);
     Route::post('/loans/{loan}/repayments', [RepaymentController::class, 'store']);
+    Route::post('/collections/{schedule}/collect', [RepaymentController::class, 'collect']);
     Route::post('/repayments/{repayment}/reverse', [RepaymentController::class, 'reverse']);
     Route::get('/receipts/{receipt}', [RepaymentController::class, 'receipt']);
     Route::get('/collections', [OperationsController::class, 'collections']);

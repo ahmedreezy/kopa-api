@@ -16,7 +16,9 @@ class LoanController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Loan::query()->with('borrower', 'product')->latest();
-        if ($status = $request->input('status')) $query->where('status', $status);
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
 
         return response()->json($query->paginate(20));
     }
@@ -75,10 +77,18 @@ class LoanController extends Controller
         $data = $request->validate($rules);
         $product = LoanProduct::query()->where('is_active', true)->findOrFail($data['loan_product_id']);
         $errors = [];
-        if ((int) $data['principal_amount'] < $product->minimum_principal || (int) $data['principal_amount'] > $product->maximum_principal) $errors['principal_amount'] = 'The amount is outside this product’s allowed range.';
-        if ($data['duration_unit'] !== $product->duration_unit || (int) $data['duration'] < $product->minimum_duration || (int) $data['duration'] > $product->maximum_duration) $errors['duration'] = 'The duration is outside this product’s allowed range.';
-        if (! in_array($data['repayment_frequency'], $product->repayment_frequencies, true)) $errors['repayment_frequency'] = 'This repayment frequency is not offered for the selected product.';
-        if ($errors) throw ValidationException::withMessages($errors);
+        if ((int) $data['principal_amount'] !== $product->principal_amount) {
+            $errors['principal_amount'] = 'The principal must match the selected product.';
+        }
+        if ($data['duration_unit'] !== $product->duration_unit || (int) $data['duration'] !== $product->duration) {
+            $errors['duration'] = 'The duration must match the selected product.';
+        }
+        if (! in_array($data['repayment_frequency'], $product->repayment_frequencies, true)) {
+            $errors['repayment_frequency'] = 'This repayment frequency is not offered for the selected product.';
+        }
+        if ($errors) {
+            throw ValidationException::withMessages($errors);
+        }
 
         return [$product, $data];
     }

@@ -4,10 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\LoanProduct;
-use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class LoanProductController extends Controller
 {
@@ -16,21 +16,20 @@ class LoanProductController extends Controller
         return response()->json(['data' => LoanProduct::query()->orderByDesc('is_active')->orderBy('name')->get()]);
     }
 
-    public function store(Request $request, TenantContext $context): JsonResponse
+    public function store(Request $request): JsonResponse
     {
         abort_unless($request->user()->canPerform('loan_products.manage'), 403);
-        $data = $request->validate($this->rules());
-        $this->assertCompliant($data, $context);
+        $data = $request->validate($this->rules($request));
+        $data['code'] = $this->generateCode();
 
         return response()->json(['data' => LoanProduct::query()->create($data)], 201);
     }
 
-    public function update(Request $request, TenantContext $context, string $product): JsonResponse
+    public function update(Request $request, string $product): JsonResponse
     {
         abort_unless($request->user()->canPerform('loan_products.manage'), 403);
         $product = LoanProduct::query()->findOrFail($product);
-        $data = $request->validate($this->rules($product->id));
-        $this->assertCompliant($data, $context);
+        $data = $request->validate($this->rules($request));
         $product->update($data);
 
         return response()->json(['data' => $product->fresh()]);
@@ -45,43 +44,34 @@ class LoanProductController extends Controller
         return response()->json(['data' => $product]);
     }
 
-    private function rules(?string $ignore = null): array
+    private function rules(Request $request): array
     {
         return [
             'name' => ['required', 'string', 'max:120'],
-            'code' => ['required', 'string', 'max:30', 'alpha_dash', 'unique:tenant.loan_products,code'.($ignore ? ','.$ignore : '')],
             'description' => ['nullable', 'string', 'max:1000'], 'is_active' => ['boolean'],
-            'minimum_principal' => ['required', 'integer', 'min:1000'],
-            'maximum_principal' => ['required', 'integer', 'gte:minimum_principal'],
+            'principal_amount' => ['required', 'integer', 'min:1000'],
             'interest_rate' => ['required', 'numeric', 'min:0'], 'interest_period' => ['required', 'in:monthly,annual,loan_term'],
             'interest_method' => ['required', 'in:simple'],
-            'minimum_duration' => ['required', 'integer', 'min:1'], 'maximum_duration' => ['required', 'integer', 'gte:minimum_duration'],
+            'duration' => ['required', 'integer', 'min:1'],
             'duration_unit' => ['required', 'in:days,weeks,months'],
             'repayment_frequencies' => ['required', 'array', 'min:1'], 'repayment_frequencies.*' => ['in:daily,weekly,biweekly,monthly'],
-            'fee_type' => ['required', 'in:fixed,percentage'], 'fee_value' => ['required', 'numeric', 'min:0'],
+            'processing_fee_type' => ['nullable', 'in:fixed,percentage', 'required_with:processing_fee_value'],
+            'processing_fee_value' => ['nullable', 'numeric', 'min:0',
+                Rule::when($request->input('processing_fee_type') === 'percentage', ['lt:100']),
+                Rule::when($request->input('processing_fee_type') === 'fixed', ['lt:principal_amount']),
+            ],
             'minimum_guarantors' => ['required', 'integer', 'min:0', 'max:5'],
-            'collateral_required' => ['required', 'boolean'], 'collateral_coverage_percent' => ['nullable', 'numeric', 'min:0'],
+            'collateral_required' => ['required', 'boolean'], 'minimum_collateral_value_percent' => ['nullable', 'numeric', 'min:0'],
             'required_documents' => ['nullable', 'array'], 'required_documents.*' => ['in:national_id_front,national_id_back,borrower_photo,proof_of_residence,lc1_letter,income_evidence,business_evidence,bank_statement,mobile_money_statement'],
         ];
     }
 
-    private function assertCompliant(array $data, TenantContext $context): void
+    private function generateCode(): string
     {
-        if ($context->tenant()->regulatory_class !== 'money_lender') {
-            return;
-        }
-        $monthly = match ($data['interest_period']) {
-            'annual' => (float) $data['interest_rate'] / 12,
-            'monthly' => (float) $data['interest_rate'],
-            default => (float) $data['interest_rate'] / max(1, $this->months((int) $data['maximum_duration'], $data['duration_unit'])),
-        };
-        if ($monthly > 2.8 + 0.00001) {
-            throw ValidationException::withMessages(['interest_rate' => 'Licensed money-lender products may not exceed the configured 2.8% monthly ceiling.']);
-        }
-    }
+        do {
+            $code = 'LP-'.Str::upper(Str::random(6));
+        } while (LoanProduct::query()->where('code', $code)->exists());
 
-    private function months(int $duration, string $unit): float
-    {
-        return match ($unit) { 'days' => $duration / 30.4375, 'weeks' => ($duration * 7) / 30.4375, default => $duration };
+        return $code;
     }
 }
