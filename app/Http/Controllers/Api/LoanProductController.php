@@ -62,7 +62,7 @@ class LoanProductController extends Controller
             ],
             'minimum_guarantors' => ['required', 'integer', 'min:0', 'max:5'],
             'collateral_required' => ['required', 'boolean'], 'minimum_collateral_value_percent' => ['nullable', 'numeric', 'min:0'],
-            'required_documents' => ['nullable', 'array'], 'required_documents.*' => ['in:national_id_front,national_id_back,borrower_photo,proof_of_residence,lc1_letter,income_evidence,business_evidence,bank_statement,mobile_money_statement'],
+            'required_documents' => ['nullable', 'array'], 'required_documents.*' => ['in:identity_document,borrower_photo,proof_of_residence,lc1_letter,income_evidence,business_evidence,bank_statement,mobile_money_statement'],
         ];
     }
 

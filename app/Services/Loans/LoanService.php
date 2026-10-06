@@ -60,7 +60,16 @@ class LoanService
     {
         $errors = [];
         $categories = $borrower->documents->pluck('category')->unique()->all();
-        $missing = array_values(array_diff($product->required_documents ?? [], $categories));
+        $requirements = $product->required_documents ?? [];
+        $identityCategories = match ($borrower->id_type) {
+            'passport' => ['passport'],
+            'refugee_id' => ['refugee_id_front', 'refugee_id_back'],
+            default => ['national_id_front', 'national_id_back'],
+        };
+        $identityComplete = array_diff($identityCategories, $categories) === [];
+        $missing = array_values(array_filter($requirements, function ($requirement) use ($categories, $identityComplete) {
+            return $requirement === 'identity_document' ? ! $identityComplete : ! in_array($requirement, $categories, true);
+        }));
         if ($missing) {
             $errors['documents'] = 'Missing required borrower documents: '.implode(', ', array_map(fn ($item) => str_replace('_', ' ', $item), $missing)).'.';
         }
