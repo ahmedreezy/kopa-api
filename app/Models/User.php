@@ -21,6 +21,32 @@ class User extends Authenticatable
 
     protected $keyType = 'string';
 
+    protected $appends = ['permissions'];
+
+    private const ROLE_PERMISSIONS = [
+        'owner' => ['*'],
+        'manager' => [
+            'dashboard.view', 'search.use', 'borrowers.view', 'borrowers.manage', 'borrowers.export',
+            'borrowers.export_bulk', 'documents.view', 'documents.manage', 'loan_products.view',
+            'loan_products.manage', 'loans.view', 'loans.manage', 'collections.view', 'repayments.create',
+            'repayments.reverse', 'receipts.view', 'reports.view', 'staff.view', 'branches.view',
+            'branches.manage', 'company.view', 'audit.view',
+        ],
+        'loan_officer' => [
+            'dashboard.view', 'search.use', 'borrowers.view', 'borrowers.manage', 'borrowers.export',
+            'documents.view', 'documents.manage', 'loan_products.view', 'loans.view', 'loans.manage',
+            'branches.view', 'company.view',
+        ],
+        'collector' => [
+            'dashboard.view', 'search.use', 'borrowers.view', 'loans.view', 'collections.view',
+            'repayments.create', 'receipts.view', 'company.view',
+        ],
+        'accountant' => [
+            'dashboard.view', 'search.use', 'borrowers.view', 'loans.view', 'collections.view',
+            'receipts.view', 'reports.view', 'company.view',
+        ],
+    ];
+
     /**
      * The attributes that are mass assignable.
      *
@@ -62,16 +88,18 @@ class User extends Authenticatable
 
     public function canPerform(string $permission): bool
     {
-        $permissions = [
-            'owner' => ['*'],
-            'manager' => ['borrowers.manage', 'borrowers.export', 'borrowers.export_bulk', 'documents.manage', 'loan_products.manage', 'loans.manage', 'repayments.create', 'repayments.reverse', 'reports.view', 'staff.view'],
-            'loan_officer' => ['borrowers.manage', 'borrowers.export', 'documents.manage', 'loans.manage', 'reports.own'],
-            'collector' => ['collections.view', 'repayments.create', 'borrowers.view'],
-            'accountant' => ['reports.view', 'borrowers.view', 'loans.view'],
-        ];
-
-        $granted = $permissions[$this->role] ?? [];
+        $granted = $this->permissions();
 
         return in_array('*', $granted, true) || in_array($permission, $granted, true);
+    }
+
+    public function permissions(): array
+    {
+        return self::ROLE_PERMISSIONS[$this->role] ?? [];
+    }
+
+    public function getPermissionsAttribute(): array
+    {
+        return $this->permissions();
     }
 }

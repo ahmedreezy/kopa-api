@@ -18,10 +18,12 @@ class BorrowerController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = $this->query($request)->with([
-            'documents',
-            'loans' => fn ($q) => $q->whereIn('status', ['active', 'overdue'])->latest(),
-        ]);
+        abort_unless($request->user()->canPerform('borrowers.view'), 403);
+        $relations = ['loans' => fn ($q) => $q->whereIn('status', ['active', 'overdue'])->latest()];
+        if ($request->user()->canPerform('documents.view')) {
+            $relations[] = 'documents';
+        }
+        $query = $this->query($request)->with($relations);
 
         return response()->json($query->latest()->paginate(20));
     }
@@ -59,11 +61,16 @@ class BorrowerController extends Controller
         return response()->json($borrower->fresh()->load('documents', 'loans.schedules'));
     }
 
-    public function show(string $borrower): JsonResponse
+    public function show(Request $request, string $borrower): JsonResponse
     {
+        abort_unless($request->user()->canPerform('borrowers.view'), 403);
         $borrower = Borrower::query()->findOrFail($borrower);
+        $relations = ['loans' => fn ($q) => $q->with('product', 'schedules')->latest()];
+        if ($request->user()->canPerform('documents.view')) {
+            $relations[] = 'documents';
+        }
 
-        return response()->json($borrower->load('documents', ['loans' => fn ($q) => $q->with('product', 'schedules')->latest()]));
+        return response()->json($borrower->load($relations));
     }
 
     public function export(Request $request): StreamedResponse
@@ -150,7 +157,9 @@ class BorrowerController extends Controller
 
     private function attachDocuments(Request $request, Borrower $borrower, array $ids): void
     {
-        if ($ids === []) return;
+        if ($ids === []) {
+            return;
+        }
         Document::query()->whereIn('id', $ids)->where('documentable_type', 'temporary')
             ->where('documentable_id', $request->user()->id)
             ->update(['documentable_type' => Borrower::class, 'documentable_id' => $borrower->id]);

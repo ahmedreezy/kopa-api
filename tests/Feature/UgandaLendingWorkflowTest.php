@@ -22,6 +22,7 @@ class UgandaLendingWorkflowTest extends TestCase
         ])->assertOk();
         $headers = ['Authorization' => 'Bearer '.$login->json('token'), 'X-Tenant' => 'kopa-test-capital'];
         $identityDocuments = $this->temporaryDocuments($workspace['user']->id, ['national_id_front', 'national_id_back']);
+        $guarantorDocuments = $this->temporaryDocuments($workspace['user']->id, ['national_id_front', 'national_id_back']);
 
         $borrower = $this->withHeaders($headers)->postJson('/api/borrowers', [
             'branch_id' => $workspace['user']->branch_id, 'borrower_type' => 'individual',
@@ -40,7 +41,7 @@ class UgandaLendingWorkflowTest extends TestCase
             'interest_rate' => 2.8, 'interest_period' => 'monthly', 'interest_method' => 'simple',
             'duration' => 2, 'duration_unit' => 'months',
             'repayment_frequencies' => ['weekly', 'monthly'], 'processing_fee_type' => 'percentage', 'processing_fee_value' => 2,
-            'minimum_guarantors' => 0, 'collateral_required' => false, 'required_documents' => ['identity_document'],
+            'required_documents' => ['identity_document'],
         ])->assertCreated();
         $this->assertMatchesRegularExpression('/^LP-[A-Z0-9]{6}$/', $product->json('data.code'));
 
@@ -48,9 +49,8 @@ class UgandaLendingWorkflowTest extends TestCase
             'loan_product_id' => $product->json('data.id'), 'borrower_id' => $borrower->json('id'),
             'branch_id' => $workspace['user']->branch_id, 'principal_amount' => 500000,
             'duration' => 2, 'duration_unit' => 'months', 'repayment_frequency' => 'monthly',
-            'disbursement_date' => '2026-09-14', 'first_repayment_date' => today()->toDateString(),
+            'first_repayment_date' => today()->addDay()->toDateString(),
             'purpose' => 'Purchase shop inventory', 'source_of_repayment' => 'Retail shop proceeds',
-            'declared_disposable_income' => 500000,
         ];
         $this->withHeaders($headers)->postJson('/api/loans/calculate', array_merge($terms, ['principal_amount' => 400000]))
             ->assertUnprocessable()->assertJsonValidationErrors('principal_amount');
@@ -59,10 +59,24 @@ class UgandaLendingWorkflowTest extends TestCase
         $quote = $this->withHeaders($headers)->postJson('/api/loans/calculate', $terms)
             ->assertOk()->assertJsonPath('total_interest', 28000)->assertJsonPath('fees_amount', 10000)
             ->assertJsonPath('net_disbursement_amount', 490000)->assertJsonPath('total_payable', 528000);
-        $loan = $this->withHeaders($headers)->postJson('/api/loans', $terms + ['terms_confirmed' => true])
+        $this->withHeaders($headers)->postJson('/api/loans', $terms + ['terms_confirmed' => true])
+            ->assertUnprocessable()->assertJsonValidationErrors('security');
+        $this->withHeaders($headers)->postJson('/api/loans', $terms + ['terms_confirmed' => true, 'guarantors' => [[
+            'name' => 'Wrong Evidence', 'phone' => '0702999999', 'id_type' => 'passport', 'nin' => 'P123456',
+            'consent_confirmed' => true, 'document_ids' => $guarantorDocuments,
+        ]]])->assertUnprocessable()->assertJsonValidationErrors('guarantors.0.document_ids');
+        $loan = $this->withHeaders($headers)->postJson('/api/loans', $terms + ['terms_confirmed' => true, 'guarantors' => [[
+            'name' => 'Grace Namata', 'phone' => '0702000000', 'id_type' => 'national_id', 'nin' => 'CF900001234567',
+            'relationship' => 'Business partner', 'address' => 'Kampala', 'consent_confirmed' => true,
+            'document_ids' => $guarantorDocuments,
+        ]]])
             ->assertCreated()->assertJsonPath('total_payable', $quote->json('total_payable'))
-            ->assertJsonPath('net_disbursement_amount', 490000);
+            ->assertJsonPath('net_disbursement_amount', 490000)
+            ->assertJsonPath('creator.name', 'Test Owner')
+            ->assertJsonPath('disbursement_date', today()->toDateString().'T00:00:00.000000Z')
+            ->assertJsonCount(2, 'guarantors.0.documents');
 
+        $this->travel(1)->days();
         $queue = $this->withHeaders($headers)->getJson('/api/collections?view=due_today')
             ->assertOk()->assertJsonCount(1, 'data');
         $this->withHeaders($headers)->postJson('/api/collections/'.$loan->json('schedules.1.id').'/collect')
@@ -76,8 +90,38 @@ class UgandaLendingWorkflowTest extends TestCase
         $this->withHeaders($headers)->getJson('/api/receipts/'.$payment->json('receipt.id'))
             ->assertOk()->assertJsonPath('snapshot.borrower.name', 'Sarah Nakato')
             ->assertJsonPath('snapshot.payment.method', 'cash');
+        $this->withHeaders($headers)->getJson('/api/reports/summary?from='.today()->startOfMonth()->toDateString().'&to='.today()->endOfMonth()->toDateString())
+            ->assertOk()
+            ->assertJsonPath('money_collected', $payment->json('amount'))
+            ->assertJsonPath('loans_with_collections', 1)
+            ->assertJsonPath('loan_collections.0.id', $loan->json('id'))
+            ->assertJsonPath('loan_collections.0.collected_in_period', $payment->json('amount'));
         $this->withHeaders($headers)->get('/api/borrowers/'.$borrower->json('id').'/export.csv')
             ->assertOk()->assertHeader('content-type', 'text/csv; charset=UTF-8');
+
+        $collateralTerms = $terms;
+        $collateralTerms['first_repayment_date'] = today()->addDay()->toDateString();
+        $securityEvidence = $this->temporaryDocuments($workspace['user']->id, ['security_evidence']);
+        $this->withHeaders($headers)->postJson('/api/loans', $collateralTerms + ['terms_confirmed' => true, 'collateral' => [[
+            'security_type' => 'other', 'owner' => 'Sarah Nakato', 'estimated_value' => 800000,
+            'location' => 'Wakiso', 'document_ids' => $securityEvidence,
+        ]]])->assertUnprocessable()->assertJsonValidationErrors('collateral.0.description');
+
+        $collateralLoan = $this->withHeaders($headers)->postJson('/api/loans', $collateralTerms + ['terms_confirmed' => true, 'collateral' => [[
+            'security_type' => 'equipment', 'owner' => 'Sarah Nakato', 'estimated_value' => 800000,
+            'location' => 'Wakiso', 'document_ids' => $securityEvidence,
+        ]]])->assertCreated()->assertJsonCount(1, 'collateral.0.documents');
+        $this->assertNull($collateralLoan->json('collateral.0.description'));
+
+        $passportEvidence = $this->temporaryDocuments($workspace['user']->id, ['passport']);
+        $combinedSecurityEvidence = $this->temporaryDocuments($workspace['user']->id, ['security_evidence']);
+        $this->withHeaders($headers)->postJson('/api/loans', $collateralTerms + ['terms_confirmed' => true, 'guarantors' => [[
+            'name' => 'Peter Kato', 'phone' => '0702111111', 'id_type' => 'passport', 'nin' => 'P998877',
+            'consent_confirmed' => true, 'document_ids' => $passportEvidence,
+        ]], 'collateral' => [[
+            'security_type' => 'inventory', 'owner' => 'Sarah Nakato', 'estimated_value' => 600000,
+            'location' => 'Wakiso', 'document_ids' => $combinedSecurityEvidence,
+        ]]])->assertCreated()->assertJsonCount(1, 'guarantors')->assertJsonCount(1, 'collateral');
     }
 
     public function test_product_creation_ignores_license_rate_guidelines(): void
@@ -96,7 +140,7 @@ class UgandaLendingWorkflowTest extends TestCase
             'interest_rate' => 3, 'interest_period' => 'monthly', 'interest_method' => 'simple',
             'duration' => 3, 'duration_unit' => 'months',
             'repayment_frequencies' => ['monthly'], 'processing_fee_type' => 'fixed', 'processing_fee_value' => null,
-            'minimum_guarantors' => 0, 'collateral_required' => false, 'required_documents' => [],
+            'required_documents' => [],
         ])->assertCreated();
     }
 

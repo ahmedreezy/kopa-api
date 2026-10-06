@@ -15,6 +15,7 @@ class LoanController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('loans.view'), 403);
         $query = Loan::query()->with('borrower', 'product')->latest();
         if ($status = $request->input('status')) {
             $query->where('status', $status);
@@ -25,6 +26,7 @@ class LoanController extends Controller
 
     public function calculate(Request $request, LoanCalculationService $calculator): JsonResponse
     {
+        abort_unless($request->user()->canPerform('loans.manage'), 403);
         [$product, $data] = $this->validatedTerms($request);
 
         return response()->json($calculator->calculateForProduct($product, $data));
@@ -38,11 +40,16 @@ class LoanController extends Controller
         return response()->json($service->create($data, $product, $request->user()->id), 201);
     }
 
-    public function show(string $loan): JsonResponse
+    public function show(Request $request, string $loan): JsonResponse
     {
+        abort_unless($request->user()->canPerform('loans.view'), 403);
         $loan = Loan::query()->findOrFail($loan);
+        $relations = ['borrower', 'product', 'creator', 'schedules', 'repayments.receipt', 'guarantors', 'collateral'];
+        if ($request->user()->canPerform('documents.view')) {
+            $relations = ['borrower.documents', 'product', 'creator', 'schedules', 'repayments.receipt', 'guarantors.documents', 'collateral.documents'];
+        }
 
-        return response()->json($loan->load('borrower.documents', 'product', 'schedules', 'repayments.receipt', 'guarantors', 'collateral', 'documents'));
+        return response()->json($loan->load($relations));
     }
 
     private function validatedTerms(Request $request, bool $withEvidence = false): array
@@ -52,29 +59,32 @@ class LoanController extends Controller
             'borrower_id' => ['required', 'uuid', 'exists:tenant.borrowers,id'], 'branch_id' => ['required', 'uuid', 'exists:tenant.branches,id'],
             'principal_amount' => ['required', 'integer', 'min:1000'], 'duration' => ['required', 'integer', 'min:1'],
             'duration_unit' => ['required', 'in:days,weeks,months'], 'repayment_frequency' => ['required', 'in:daily,weekly,biweekly,monthly'],
-            'disbursement_date' => ['required', 'date'], 'first_repayment_date' => ['required', 'date', 'after_or_equal:disbursement_date'],
+            'first_repayment_date' => ['required', 'date', 'after:today'],
             'purpose' => ['required', 'string', 'max:500'], 'source_of_repayment' => ['required', 'string', 'max:1000'],
-            'declared_disposable_income' => ['required', 'integer', 'min:0'],
         ];
         if ($withEvidence) {
             $rules += [
                 'guarantors' => ['sometimes', 'array', 'max:5'], 'guarantors.*.name' => ['required', 'string', 'max:150'],
-                'guarantors.*.phone' => ['required', 'string', 'max:30'], 'guarantors.*.alternative_phone' => ['nullable', 'string', 'max:30'],
-                'guarantors.*.nin' => ['nullable', 'string', 'max:30'], 'guarantors.*.relationship' => ['nullable', 'string', 'max:80'],
-                'guarantors.*.address' => ['nullable', 'string', 'max:255'], 'guarantors.*.occupation' => ['nullable', 'string', 'max:120'],
-                'guarantors.*.employer_name' => ['nullable', 'string', 'max:150'], 'guarantors.*.monthly_income' => ['nullable', 'integer', 'min:0'],
+                'guarantors.*.phone' => ['required', 'string', 'max:30'],
+                'guarantors.*.id_type' => ['required', 'in:national_id,passport,refugee_id'],
+                'guarantors.*.nin' => ['required', 'string', 'max:30'], 'guarantors.*.relationship' => ['nullable', 'string', 'max:80'],
+                'guarantors.*.address' => ['nullable', 'string', 'max:255'],
                 'guarantors.*.consent_confirmed' => ['accepted'],
+                'guarantors.*.document_ids' => ['required', 'array', 'min:1'], 'guarantors.*.document_ids.*' => ['uuid'],
                 'collateral' => ['sometimes', 'array'], 'collateral.*.security_type' => ['required', 'in:land,vehicle,motorcycle,business_asset,household_asset,inventory,equipment,livestock,other'],
-                'collateral.*.description' => ['required', 'string', 'max:1000'], 'collateral.*.estimated_value' => ['nullable', 'integer', 'min:0'],
-                'collateral.*.forced_sale_value' => ['nullable', 'integer', 'min:0'], 'collateral.*.reference_number' => ['nullable', 'string', 'max:100'],
+                'collateral.*.description' => ['nullable', 'required_if:collateral.*.security_type,other', 'string', 'max:1000'], 'collateral.*.estimated_value' => ['nullable', 'integer', 'min:0'],
                 'collateral.*.owner' => ['nullable', 'string', 'max:150'], 'collateral.*.condition' => ['nullable', 'string', 'max:100'],
                 'collateral.*.location' => ['nullable', 'string', 'max:255'], 'collateral.*.custody_status' => ['nullable', 'in:with_borrower,held_by_lender,registered_interest'],
                 'collateral.*.simpo_registration_number' => ['nullable', 'string', 'max:100'], 'collateral.*.notes' => ['nullable', 'string', 'max:1000'],
-                'document_ids' => ['sometimes', 'array'], 'document_ids.*' => ['uuid'],
+                'collateral.*.document_ids' => ['required', 'array', 'min:1'], 'collateral.*.document_ids.*' => ['uuid'],
                 'terms_confirmed' => ['accepted'],
             ];
         }
         $data = $request->validate($rules);
+        $data['disbursement_date'] = today()->toDateString();
+        if ($withEvidence && empty($data['guarantors']) && empty($data['collateral'])) {
+            throw ValidationException::withMessages(['security' => 'Add at least one guarantor or collateral item.']);
+        }
         $product = LoanProduct::query()->where('is_active', true)->findOrFail($data['loan_product_id']);
         $errors = [];
         if ((int) $data['principal_amount'] !== $product->principal_amount) {

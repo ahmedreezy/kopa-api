@@ -13,6 +13,7 @@ use App\Models\RepaymentSchedule;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\ValidationException;
 
 class LoanService
@@ -23,12 +24,13 @@ class LoanService
     {
         $borrower = Borrower::query()->with('documents')->findOrFail($data['borrower_id']);
         $this->assertRequirements($borrower, $product, $data);
+        $this->assertEvidenceDocuments($data, $userId);
 
         return DB::connection('tenant')->transaction(function () use ($data, $product, $userId) {
             $calculation = $this->calculator->calculateForProduct($product, $data);
             $loan = Loan::query()->create(array_merge(Arr::only($data, [
                 'borrower_id', 'branch_id', 'principal_amount', 'duration', 'duration_unit', 'repayment_frequency',
-                'disbursement_date', 'first_repayment_date', 'purpose', 'source_of_repayment', 'declared_disposable_income',
+                'disbursement_date', 'first_repayment_date', 'purpose', 'source_of_repayment',
             ]), [
                 'loan_product_id' => $product->id, 'loan_number' => 'LN-'.now()->format('ymd').'-'.strtoupper(Str::random(5)),
                 'created_by' => $userId, 'status' => 'active', 'confirmed_at' => now(),
@@ -39,12 +41,15 @@ class LoanService
                 RepaymentSchedule::query()->create($entry + ['loan_id' => $loan->id]);
             }
             foreach ($data['guarantors'] ?? [] as $row) {
-                Guarantor::query()->create(Arr::except($row, ['consent_confirmed']) + ['loan_id' => $loan->id, 'consent_given_at' => now()]);
+                $documentIds = $row['document_ids'];
+                $guarantor = Guarantor::query()->create(Arr::except($row, ['consent_confirmed', 'document_ids']) + ['loan_id' => $loan->id, 'consent_given_at' => now()]);
+                $this->attachDocuments($guarantor, $documentIds, $userId);
             }
             foreach ($data['collateral'] ?? [] as $row) {
-                Collateral::query()->create($row + ['loan_id' => $loan->id]);
+                $documentIds = $row['document_ids'];
+                $collateral = Collateral::query()->create(Arr::except($row, ['document_ids']) + ['loan_id' => $loan->id]);
+                $this->attachDocuments($collateral, $documentIds, $userId);
             }
-            $this->attachDocuments($loan, $data['document_ids'] ?? [], $userId);
 
             AuditLog::query()->create([
                 'user_id' => $userId, 'action' => 'loan.created', 'entity_type' => Loan::class,
@@ -52,7 +57,7 @@ class LoanService
                 'ip_address' => request()->ip(), 'user_agent' => request()->userAgent(),
             ]);
 
-            return $loan->load('borrower', 'product', 'schedules', 'guarantors', 'collateral', 'documents');
+            return $loan->load('borrower', 'product', 'creator', 'schedules', 'guarantors.documents', 'collateral.documents');
         });
     }
 
@@ -73,30 +78,48 @@ class LoanService
         if ($missing) {
             $errors['documents'] = 'Missing required borrower documents: '.implode(', ', array_map(fn ($item) => str_replace('_', ' ', $item), $missing)).'.';
         }
-        if (count($data['guarantors'] ?? []) < $product->minimum_guarantors) {
-            $errors['guarantors'] = "This product requires at least {$product->minimum_guarantors} guarantor(s).";
-        }
-        if ($product->collateral_required && empty($data['collateral'])) {
-            $errors['collateral'] = 'Collateral is required for this product.';
-        }
-        if ($product->collateral_required && $product->minimum_collateral_value_percent) {
-            $value = collect($data['collateral'] ?? [])->sum(fn ($item) => (int) ($item['forced_sale_value'] ?? $item['estimated_value'] ?? 0));
-            $required = (int) ceil((int) $data['principal_amount'] * ((float) $product->minimum_collateral_value_percent / 100));
-            if ($value < $required) {
-                $errors['collateral_coverage'] = 'Collateral value does not meet this product’s required coverage.';
-            }
-        }
         if ($errors) {
             throw ValidationException::withMessages($errors);
         }
     }
 
-    private function attachDocuments(Loan $loan, array $ids, string $userId): void
+    private function assertEvidenceDocuments(array $data, string $userId): void
+    {
+        $errors = [];
+        foreach ($data['guarantors'] ?? [] as $index => $guarantor) {
+            $required = match ($guarantor['id_type']) {
+                'passport' => ['passport'],
+                'refugee_id' => ['refugee_id_front', 'refugee_id_back'],
+                default => ['national_id_front', 'national_id_back'],
+            };
+            $categories = $this->temporaryDocumentCategories($guarantor['document_ids'], $userId);
+            if (array_diff($required, $categories) !== []) {
+                $errors["guarantors.{$index}.document_ids"] = 'Upload all identification document sides for this guarantor.';
+            }
+        }
+        foreach ($data['collateral'] ?? [] as $index => $collateral) {
+            $categories = $this->temporaryDocumentCategories($collateral['document_ids'], $userId);
+            if (! in_array('security_evidence', $categories, true)) {
+                $errors["collateral.{$index}.document_ids"] = 'Upload a photo or supporting document for this collateral item.';
+            }
+        }
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    private function temporaryDocumentCategories(array $ids, string $userId): array
+    {
+        return Document::query()->whereIn('id', $ids)->where('documentable_type', 'temporary')
+            ->where('documentable_id', $userId)->pluck('category')->unique()->all();
+    }
+
+    private function attachDocuments(Model $documentable, array $ids, string $userId): void
     {
         if ($ids === []) {
             return;
         }
         Document::query()->whereIn('id', $ids)->where('documentable_type', 'temporary')->where('documentable_id', $userId)
-            ->update(['documentable_type' => Loan::class, 'documentable_id' => $loan->id]);
+            ->update(['documentable_type' => $documentable::class, 'documentable_id' => $documentable->getKey()]);
     }
 }

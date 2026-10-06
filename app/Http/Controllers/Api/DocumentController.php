@@ -88,7 +88,7 @@ class DocumentController extends Controller
 
     public function download(Request $request, string $document): StreamedResponse
     {
-        abort_unless($request->user()->canPerform('documents.manage') || $request->user()->canPerform('borrowers.view'), 403);
+        abort_unless($request->user()->canPerform('documents.view'), 403);
         $document = Document::query()->where('documentable_type', '!=', 'temporary')->findOrFail($document);
         AuditLog::query()->create([
             'user_id' => $request->user()->id, 'action' => 'document.downloaded', 'entity_type' => Document::class,

@@ -18,6 +18,7 @@ class InitializeTenant
 
         $tenant = Tenant::query()->where('slug', $slug)->firstOrFail();
         app(TenantContext::class)->initialize($tenant);
+        Auth::forgetGuards();
         $user = Auth::guard('sanctum')->user();
         abort_unless($user && $user->is_active, 401, 'Sign in to continue.');
         $request->setUserResolver(fn () => $user);
@@ -25,6 +26,7 @@ class InitializeTenant
         try {
             return $next($request);
         } finally {
+            Auth::forgetGuards();
             app(TenantContext::class)->forget();
         }
     }

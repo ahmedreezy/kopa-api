@@ -25,7 +25,7 @@ class AuthController extends Controller
         return response()->json([
             'token' => $token,
             'tenant' => $result['tenant']->only('id', 'name', 'slug', 'status'),
-            'user' => $result['user']->only('id', 'name', 'email', 'role', 'branch_id'),
+            'user' => $result['user']->only('id', 'name', 'email', 'role', 'branch_id', 'permissions'),
         ], 201);
     }
 
@@ -45,7 +45,7 @@ class AuthController extends Controller
         return response()->json([
             'token' => $user->createToken('web')->plainTextToken,
             'tenant' => $tenant->only('id', 'name', 'slug', 'status'),
-            'user' => $user->only('id', 'name', 'email', 'role', 'branch_id'),
+            'user' => $user->only('id', 'name', 'email', 'role', 'branch_id', 'permissions'),
         ]);
     }
 

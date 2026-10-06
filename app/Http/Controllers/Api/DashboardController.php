@@ -8,11 +8,13 @@ use App\Models\Loan;
 use App\Models\Repayment;
 use App\Models\RepaymentSchedule;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
-    public function __invoke(): JsonResponse
+    public function __invoke(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('dashboard.view'), 403);
         $activeLoans = Loan::query()->where('status', 'active')->get();
         $outstanding = $activeLoans->sum(fn (Loan $loan) => $loan->outstanding_amount);
         $dueToday = RepaymentSchedule::query()->whereDate('due_date', today())->where('status', '!=', 'paid');
@@ -34,8 +36,9 @@ class DashboardController extends Controller
         ]);
     }
 
-    public function search(string $query): JsonResponse
+    public function search(Request $request, string $query): JsonResponse
     {
+        abort_unless($request->user()->canPerform('search.use'), 403);
         $borrowers = Borrower::query()->with(['loans' => fn ($q) => $q->where('status', 'active')])
             ->where(fn ($q) => $q->where('full_name', 'like', "%{$query}%")->orWhere('phone_number', 'like', "%{$query}%"))
             ->limit(8)->get();

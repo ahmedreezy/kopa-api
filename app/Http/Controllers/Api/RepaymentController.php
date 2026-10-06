@@ -46,8 +46,9 @@ class RepaymentController extends Controller
         return response()->json($service->reverse(Repayment::query()->findOrFail($repayment), $data['reason'], $request->user()->id), 201);
     }
 
-    public function receipt(string $receipt): JsonResponse
+    public function receipt(Request $request, string $receipt): JsonResponse
     {
+        abort_unless($request->user()->canPerform('receipts.view'), 403);
         $receipt = Receipt::query()->findOrFail($receipt);
 
         return response()->json($receipt->loadMissing(['repayment', 'loan.borrower']));

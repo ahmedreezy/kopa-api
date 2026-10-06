@@ -11,8 +11,10 @@ use Illuminate\Validation\Rule;
 
 class LoanProductController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('loan_products.view'), 403);
+
         return response()->json(['data' => LoanProduct::query()->orderByDesc('is_active')->orderBy('name')->get()]);
     }
 
@@ -60,8 +62,6 @@ class LoanProductController extends Controller
                 Rule::when($request->input('processing_fee_type') === 'percentage', ['lt:100']),
                 Rule::when($request->input('processing_fee_type') === 'fixed', ['lt:principal_amount']),
             ],
-            'minimum_guarantors' => ['required', 'integer', 'min:0', 'max:5'],
-            'collateral_required' => ['required', 'boolean'], 'minimum_collateral_value_percent' => ['nullable', 'numeric', 'min:0'],
             'required_documents' => ['nullable', 'array'], 'required_documents.*' => ['in:identity_document,borrower_photo,proof_of_residence,lc1_letter,income_evidence,business_evidence,bank_statement,mobile_money_statement'],
         ];
     }

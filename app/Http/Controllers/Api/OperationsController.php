@@ -19,6 +19,7 @@ class OperationsController extends Controller
 {
     public function collections(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('collections.view'), 403);
         $view = $request->input('view', 'due_today');
         $query = RepaymentSchedule::query()->with('loan.borrower')->where('status', '!=', 'paid');
         $query->whereNotExists(function ($earlier) {
@@ -36,14 +37,16 @@ class OperationsController extends Controller
         return response()->json($query->orderBy('due_date')->paginate(25));
     }
 
-    public function branches(): JsonResponse
+    public function branches(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('branches.view'), 403);
+
         return response()->json(Branch::query()->orderBy('name')->get());
     }
 
     public function storeBranch(Request $request): JsonResponse
     {
-        abort_unless($request->user()->canPerform('staff.view'), 403);
+        abort_unless($request->user()->canPerform('branches.manage'), 403);
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
             'code' => ['required', 'string', 'max:20', 'unique:tenant.branches,code'],
@@ -54,14 +57,16 @@ class OperationsController extends Controller
         return response()->json(Branch::query()->create($data + ['is_active' => true]), 201);
     }
 
-    public function staff(): JsonResponse
+    public function staff(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('staff.view'), 403);
+
         return response()->json(User::query()->with([])->orderBy('name')->get());
     }
 
     public function storeStaff(Request $request): JsonResponse
     {
-        abort_unless($request->user()->role === 'owner', 403);
+        abort_unless($request->user()->canPerform('staff.manage'), 403);
         $data = $request->validate([
             'branch_id' => ['nullable', 'uuid', 'exists:tenant.branches,id'],
             'name' => ['required', 'string', 'max:150'],
@@ -79,31 +84,76 @@ class OperationsController extends Controller
     public function reportSummary(Request $request): JsonResponse
     {
         abort_unless($request->user()->canPerform('reports.view') || $request->user()->role === 'owner', 403);
-        $from = Carbon::parse($request->input('from', now()->startOfMonth()->toDateString()));
-        $to = Carbon::parse($request->input('to', now()->endOfMonth()->toDateString()));
-        $loans = Loan::query()->whereBetween('disbursement_date', [$from, $to])->get();
-        $payments = Repayment::query()->where('entry_type', 'payment')->whereBetween('paid_at', [$from->startOfDay(), $to->endOfDay()])->get();
+        $range = $request->validate([
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
+        ]);
+        $from = Carbon::parse($range['from'] ?? now()->startOfMonth()->toDateString())->startOfDay();
+        $to = Carbon::parse($range['to'] ?? now()->endOfMonth()->toDateString())->endOfDay();
+        $loans = Loan::query()->whereBetween('disbursement_date', [$from->toDateString(), $to->toDateString()])->get();
+        $entries = Repayment::query()->whereBetween('paid_at', [$from, $to])->get();
+        $payments = $entries->where('entry_type', 'payment');
+        $reversals = $entries->where('entry_type', 'reversal');
         $activeLoans = Loan::query()->where('status', 'active')->get();
         $overdue = RepaymentSchedule::query()->whereDate('due_date', '<', today())->where('status', '!=', 'paid')->get();
+        $scheduled = RepaymentSchedule::query()
+            ->whereBetween('due_date', [$from->toDateString(), $to->toDateString()])
+            ->get();
         $staff = User::query()->orderBy('name')->get()->map(fn (User $user) => [
             'id' => $user->id,
             'name' => $user->name,
-            'amount' => $payments->where('recorded_by', $user->id)->sum('amount'),
+            'role' => $user->role,
+            'amount' => $entries->where('recorded_by', $user->id)->sum('amount'),
+            'gross_amount' => $payments->where('recorded_by', $user->id)->sum('amount'),
+            'reversed_amount' => abs($reversals->where('recorded_by', $user->id)->sum('amount')),
             'payments' => $payments->where('recorded_by', $user->id)->count(),
-        ])->filter(fn (array $row) => $row['payments'] > 0)->values();
+        ])->filter(fn (array $row) => $row['payments'] > 0 || $row['reversed_amount'] > 0)->values();
+        $loanCollections = Loan::query()
+            ->with('borrower:id,full_name,phone_number')
+            ->whereHas('repayments', fn ($query) => $query->whereBetween('paid_at', [$from, $to]))
+            ->withSum(['repayments as collected_in_period' => fn ($query) => $query->whereBetween('paid_at', [$from, $to])], 'amount')
+            ->withSum('repayments as total_collected', 'amount')
+            ->withMax(['repayments as last_payment_at' => fn ($query) => $query->whereBetween('paid_at', [$from, $to])], 'paid_at')
+            ->get()
+            ->sortByDesc('last_payment_at')
+            ->values()
+            ->map(fn (Loan $loan) => [
+                'id' => $loan->id,
+                'loan_number' => $loan->loan_number,
+                'borrower' => $loan->borrower?->only('id', 'full_name', 'phone_number'),
+                'principal_amount' => (int) $loan->principal_amount,
+                'total_payable' => (int) $loan->total_payable,
+                'collected_in_period' => (int) $loan->collected_in_period,
+                'total_collected' => (int) $loan->total_collected,
+                'outstanding' => $loan->outstanding_amount,
+                'last_payment_at' => $loan->last_payment_at,
+                'status' => $loan->status,
+            ]);
+        $scheduledDue = (int) $scheduled->sum('amount_due');
+        $netCollected = (int) $entries->sum('amount');
 
         return response()->json([
+            'period' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
             'money_lent' => $loans->sum('net_disbursement_amount'),
-            'money_collected' => $payments->sum('amount'),
+            'loans_disbursed' => $loans->count(),
+            'money_collected' => $netCollected,
+            'gross_collected' => (int) $payments->sum('amount'),
+            'reversed_amount' => abs((int) $reversals->sum('amount')),
+            'loans_with_collections' => $loanCollections->count(),
+            'completed_loans' => $loanCollections->where('status', 'completed')->count(),
+            'scheduled_due' => $scheduledDue,
+            'collection_rate' => $scheduledDue > 0 ? round(($netCollected / $scheduledDue) * 100, 1) : 0,
             'interest_expected' => $loans->sum('total_interest'),
             'outstanding' => $activeLoans->sum(fn (Loan $loan) => $loan->outstanding_amount),
             'overdue' => $overdue->sum(fn ($item) => $item->amount_due - $item->amount_paid),
             'collections_by_staff' => $staff,
+            'loan_collections' => $loanCollections,
         ]);
     }
 
-    public function company(TenantContext $context): JsonResponse
+    public function company(Request $request, TenantContext $context): JsonResponse
     {
+        abort_unless($request->user()->canPerform('company.view'), 403);
         $tenant = $context->tenant();
 
         return response()->json([
@@ -121,7 +171,7 @@ class OperationsController extends Controller
 
     public function updateCompany(Request $request, TenantContext $context): JsonResponse
     {
-        abort_unless($request->user()->role === 'owner', 403);
+        abort_unless($request->user()->canPerform('company.manage'), 403);
         $data = $request->validate([
             'name' => ['required', 'string', 'max:150'],
             'phone' => ['nullable', 'string', 'max:30'],
@@ -143,11 +193,13 @@ class OperationsController extends Controller
             'settings' => collect($tenant->settings ?? [])->merge(collect($data)->only(['phone', 'email', 'address', 'currency']))->all(),
         ])->save();
 
-        return $this->company($context);
+        return $this->company($request, $context);
     }
 
-    public function audit(): JsonResponse
+    public function audit(Request $request): JsonResponse
     {
+        abort_unless($request->user()->canPerform('audit.view'), 403);
+
         return response()->json(AuditLog::query()->latest('created_at')->paginate(30));
     }
 }

@@ -31,6 +31,11 @@ class Loan extends TenantModel
         return $this->belongsTo(LoanProduct::class, 'loan_product_id');
     }
 
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
     public function schedules(): HasMany
     {
         return $this->hasMany(RepaymentSchedule::class)->orderBy('installment_number');
